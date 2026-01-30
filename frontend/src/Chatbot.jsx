@@ -3,8 +3,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const API_BASE =
-  import.meta.env.VITE_API_URL || "https://esita-chatbot.onrender.com";
-
+  import.meta.env.VITE_API_URL?.replace(/\/$/, "") ||
+  "https://esita-chatbot.onrender.com"; // no trailing slash
 
 function normalize(s = "") {
   return s.toLowerCase().trim();
@@ -34,7 +34,6 @@ function isCreatorQuestion(msg) {
 function CodeBlock({ inline, className, children }) {
   const code = String(children ?? "").replace(/\n$/, "");
   const lang = (className || "").replace("language-", "");
-
   const [copied, setCopied] = useState(false);
 
   async function copy() {
@@ -42,9 +41,7 @@ function CodeBlock({ inline, className, children }) {
       await navigator.clipboard.writeText(code);
       setCopied(true);
       setTimeout(() => setCopied(false), 1200);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   if (inline) {
@@ -85,9 +82,7 @@ function MarkdownMessage({ text }) {
             <table className="w-full text-left text-sm">{children}</table>
           </div>
         ),
-        thead: ({ children }) => (
-          <thead className="bg-white/5">{children}</thead>
-        ),
+        thead: ({ children }) => <thead className="bg-white/5">{children}</thead>,
         th: ({ children }) => (
           <th className="px-3 py-2 border-b border-white/10 font-semibold">
             {children}
@@ -96,18 +91,25 @@ function MarkdownMessage({ text }) {
         td: ({ children }) => (
           <td className="px-3 py-2 border-b border-white/10">{children}</td>
         ),
-        ul: ({ children }) => (
-          <ul className="list-disc pl-6 my-2 space-y-1">{children}</ul>
-        ),
-        ol: ({ children }) => (
-          <ol className="list-decimal pl-6 my-2 space-y-1">{children}</ol>
-        ),
-        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+        ul: ({ children }) => <ul className="list-disc pl-6 my-2 space-y-1">{children}</ul>,
+        ol: ({ children }) => <ol className="list-decimal pl-6 my-2 space-y-1">{children}</ol>,
       }}
     >
       {text}
     </ReactMarkdown>
   );
+}
+
+// timeout helper
+async function fetchWithTimeout(url, options = {}, ms = 45000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  try {
+    const res = await fetch(url, { ...options, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
 }
 
 export default function Chatbot() {
@@ -127,12 +129,23 @@ export default function Chatbot() {
     el.scrollTop = el.scrollHeight;
   }, [messages, sending]);
 
+  // check backend health on load
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetchWithTimeout(`${API_BASE}/health`, {}, 15000);
+        setOnline(r.ok);
+      } catch {
+        setOnline(false);
+      }
+    })();
+  }, []);
+
   const historyForServer = useMemo(() => {
-    const trimmed = messages.slice(-10).map((m) => ({
+    return messages.slice(-10).map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
       text: m.text,
     }));
-    return trimmed;
   }, [messages]);
 
   async function send() {
@@ -143,10 +156,7 @@ export default function Chatbot() {
     setInput("");
 
     if (isCreatorQuestion(text)) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: "Sweetyseleena created me. 👑" },
-      ]);
+      setMessages((prev) => [...prev, { role: "assistant", text: "Sweetyseleena created me. 👑" }]);
       return;
     }
 
@@ -157,33 +167,41 @@ export default function Chatbot() {
 
     setSending(true);
     try {
-      const r = await fetch(`${API_BASE}/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          history: historyForServer,
-        }),
-      });
+      const r = await fetchWithTimeout(
+        `${API_BASE}/api/chat`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, history: historyForServer }),
+        },
+        45000
+      );
 
-      const data = await r.json();
-
-      if (data?.error) {
-        setMessages((prev) => [...prev, { role: "assistant", text: `❌ ${data.error}` }]);
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", text: data.reply ?? "No reply." },
-        ]);
+      let data = null;
+      try {
+        data = await r.json();
+      } catch {
+        // non-json response
       }
 
-      setOnline(true);
+      if (!r.ok) {
+        const msg = data?.reply || data?.error || `HTTP ${r.status}`;
+        setMessages((prev) => [...prev, { role: "assistant", text: `❌ ${msg}` }]);
+        setOnline(false);
+      } else if (data?.reply) {
+        setMessages((prev) => [...prev, { role: "assistant", text: data.reply }]);
+        setOnline(true);
+      } else {
+        setMessages((prev) => [...prev, { role: "assistant", text: "No reply." }]);
+        setOnline(true);
+      }
     } catch (e) {
+      const msg =
+        e?.name === "AbortError"
+          ? "Request timed out (Render sleeping or slow). Try again."
+          : "Connection error. Please try again.";
       setOnline(false);
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: "Connection error. Please try again." },
-      ]);
+      setMessages((prev) => [...prev, { role: "assistant", text: msg }]);
     } finally {
       setSending(false);
     }
@@ -206,11 +224,8 @@ export default function Chatbot() {
                 online ? "bg-emerald-400" : "bg-red-400"
               }`}
             />
-            <span className="text-sm opacity-80">
-              {online ? "Online" : "Offline"}
-            </span>
+            <span className="text-sm opacity-80">{online ? "Online" : "Offline"}</span>
           </div>
-
           <div className="text-base font-semibold">Esita</div>
         </div>
 
@@ -261,9 +276,6 @@ export default function Chatbot() {
             >
               Send
             </button>
-          </div>
-          <div className="mt-2 text-xs opacity-60">
-            API: {API_BASE}
           </div>
         </div>
       </div>

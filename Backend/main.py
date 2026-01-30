@@ -24,19 +24,22 @@ client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 app = FastAPI(title="Esita Backend", version="1.0.0")
 
 # ----------------------------
-# CORS (IMPORTANT FOR NETLIFY)
+# CORS (NETLIFY + LOCAL)
 # ----------------------------
-# ✅ Production URL fixed
-# ✅ All Netlify preview URLs allowed via regex
+ALLOW_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://esita-chatbot.netlify.app",
+]
+
+# Netlify preview links: https://xxxx--esita-chatbot.netlify.app
+NETLIFY_PREVIEW_REGEX = r"^https://.*\.netlify\.app$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://esita-chatbot.netlify.app",
-    ],
-    allow_origin_regex=r"^https://.*\.netlify\.app$",
-    allow_credentials=False,  # ✅ keep False (no cookies)
+    allow_origins=ALLOW_ORIGINS,
+    allow_origin_regex=NETLIFY_PREVIEW_REGEX,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -45,52 +48,41 @@ app.add_middleware(
 # MODELS
 # ----------------------------
 class HistoryItem(BaseModel):
-    role: str  # "user" or "assistant"
+    role: str
     text: str
-
 
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[HistoryItem]] = []
 
-
 class ChatResponse(BaseModel):
     reply: str
-
 
 # ----------------------------
 # ROUTES
 # ----------------------------
 @app.get("/")
 def root():
-    return {
-        "message": "Esita backend is running ✅",
-        "try": ["/health", "/docs", "/api/chat (POST)"],
-    }
-
+    return {"message": "Esita backend is running ✅", "try": ["/health", "/docs", "/api/chat (POST)"]}
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     if not GEMINI_API_KEY or not client:
-        return ChatResponse(
-            reply="❌ Gemini API key not found. Add GEMINI_API_KEY in Render Environment Variables."
-        )
+        return ChatResponse(reply="❌ Gemini API key not found. Add GEMINI_API_KEY in Render Environment Variables.")
 
     user_msg = (req.message or "").strip()
     if not user_msg:
         return ChatResponse(reply="Please type something 🙂")
 
-    # Speed: keep smaller history
+    # Keep small history (speed)
     history = req.history[-6:] if req.history else []
 
-    # System prompt (short for speed)
-    lines = [
-        "SYSTEM: You are Esita, a helpful assistant. Reply clearly and briefly unless the user asks for a long explanation.",
+    prompt_lines = [
+        "SYSTEM: You are Esita, a helpful assistant. Reply clearly and briefly unless user asks for long explanation."
     ]
 
     for h in history:
@@ -100,26 +92,24 @@ def chat(req: ChatRequest):
             continue
         if r not in ["user", "assistant"]:
             r = "user"
-        lines.append(f"{r.upper()}: {t}")
+        prompt_lines.append(f"{r.upper()}: {t}")
 
-    lines.append(f"USER: {user_msg}")
-    lines.append("ASSISTANT:")
+    prompt_lines.append(f"USER: {user_msg}")
+    prompt_lines.append("ASSISTANT:")
 
-    prompt = "\n".join(lines)
+    prompt = "\n".join(prompt_lines)
 
     try:
-        # ✅ Model name correct
+        # ✅ Use a currently supported model id (instead of gemini-1.5-flash)
         res = client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.0-flash",
             contents=prompt,
         )
 
-        text = (res.text or "").strip()
+        text = (getattr(res, "text", "") or "").strip()
         if not text:
             text = "I couldn't generate a reply. Please try again."
-
         return ChatResponse(reply=text)
 
     except Exception as e:
-        # show real error
         return ChatResponse(reply=f"❌ Server error: {str(e)}")
