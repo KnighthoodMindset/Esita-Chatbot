@@ -13,27 +13,24 @@ load_dotenv()
 # ----------------------------
 # CONFIG
 # ----------------------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_KEY")
-
-if not GEMINI_API_KEY:
-    # Don't crash hard; return helpful error in /api/chat
-    pass
+GEMINI_API_KEY = (
+    os.getenv("GEMINI_API_KEY")
+    or os.getenv("GOOGLE_API_KEY")
+    or os.getenv("GEMINI_KEY")
+)
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = FastAPI(title="Esita Backend", version="1.0.0")
 
-
 # ----------------------------
 # CORS (IMPORTANT FOR NETLIFY)
 # ----------------------------
-# Add your Netlify production URL + the preview URL that you tested.
-# Update preview URL if it changes.
 ALLOW_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "https://esita-chatbot.netlify.app",
-    "https://697c004cf8eb34059ed1e5b7--esita-chatbot.netlify.app",  # <-- your preview link
+    "https://697c004cf8eb34059ed1e5b7--esita-chatbot.netlify.app",
 ]
 
 app.add_middleware(
@@ -44,7 +41,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ----------------------------
 # MODELS
 # ----------------------------
@@ -52,15 +48,12 @@ class HistoryItem(BaseModel):
     role: str  # "user" or "assistant"
     text: str
 
-
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[HistoryItem]] = []
 
-
 class ChatResponse(BaseModel):
     reply: str
-
 
 # ----------------------------
 # ROUTES
@@ -69,11 +62,9 @@ class ChatResponse(BaseModel):
 def root():
     return {"message": "Esita backend is running ✅", "try": ["/health", "/docs", "/api/chat (POST)"]}
 
-
 @app.get("/health")
 def health():
     return {"status": "ok"}
-
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
@@ -86,17 +77,22 @@ def chat(req: ChatRequest):
     if not user_msg:
         return ChatResponse(reply="Please type something 🙂")
 
-    # Build prompt with small history
-    lines = []
-    if req.history:
-        for h in req.history[-10:]:
-            r = (h.role or "").lower().strip()
-            t = (h.text or "").strip()
-            if not t:
-                continue
-            if r not in ["user", "assistant"]:
-                r = "user"
-            lines.append(f"{r.upper()}: {t}")
+    # Speed: keep smaller history
+    history = req.history[-6:] if req.history else []
+
+    # Clean prompt
+    lines = [
+        "SYSTEM: You are Esita, a helpful assistant. Reply clearly and briefly unless user asks for long explanation.",
+    ]
+
+    for h in history:
+        r = (h.role or "").lower().strip()
+        t = (h.text or "").strip()
+        if not t:
+            continue
+        if r not in ["user", "assistant"]:
+            r = "user"
+        lines.append(f"{r.upper()}: {t}")
 
     lines.append(f"USER: {user_msg}")
     lines.append("ASSISTANT:")
@@ -104,7 +100,7 @@ def chat(req: ChatRequest):
     prompt = "\n".join(lines)
 
     try:
-        # Fast + simple Gemini call
+        # ✅ Correct model name (NO "models/")
         res = client.models.generate_content(
             model="gemini-1.5-flash",
             contents=prompt,
