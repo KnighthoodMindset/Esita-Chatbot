@@ -2,7 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-const API_BASE = "http://127.0.0.1:8000";
+// ✅ Use deployed backend via Vite env, fallback to local for dev
+const API_BASE = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").replace(
+  /\/+$/,
+  ""
+);
 
 function normalize(s = "") {
   return s.toLowerCase().trim();
@@ -100,9 +104,7 @@ function MarkdownMessage({ text }) {
         ol: ({ children }) => (
           <ol className="list-decimal pl-6 my-2 space-y-1">{children}</ol>
         ),
-        strong: ({ children }) => (
-          <strong className="font-semibold">{children}</strong>
-        ),
+        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
       }}
     >
       {text}
@@ -144,7 +146,7 @@ export default function Chatbot() {
     setMessages((prev) => [...prev, { role: "user", text }]);
     setInput("");
 
-    // local fixed replies (like your old JS)
+    // local fixed replies
     if (isCreatorQuestion(text)) {
       setMessages((prev) => [
         ...prev,
@@ -154,10 +156,7 @@ export default function Chatbot() {
     }
 
     if (isNameQuestion(text)) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", text: "I'm Esita 🤖" },
-      ]);
+      setMessages((prev) => [...prev, { role: "assistant", text: "I'm Esita 🤖" }]);
       return;
     }
 
@@ -172,7 +171,19 @@ export default function Chatbot() {
         }),
       });
 
+      // ✅ handle non-200 errors gracefully
+      if (!r.ok) {
+        const errText = await r.text();
+        setOnline(false);
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", text: `❌ Server error: ${r.status}\n${errText}` },
+        ]);
+        return;
+      }
+
       const data = await r.json();
+
       if (data?.error) {
         setMessages((prev) => [
           ...prev,
@@ -184,6 +195,7 @@ export default function Chatbot() {
           { role: "assistant", text: data.reply ?? "No reply." },
         ]);
       }
+
       setOnline(true);
     } catch (e) {
       setOnline(false);
@@ -205,9 +217,7 @@ export default function Chatbot() {
 
   return (
     <div className="min-h-screen bg-[#070b16] text-white flex items-center justify-center p-6">
-      {/* BIGGER WINDOW (like your 2nd image) */}
       <div className="w-full max-w-6xl h-[86vh] rounded-2xl border border-white/10 bg-white/5 backdrop-blur overflow-hidden shadow-2xl">
-        {/* Header: left Online, right Esita only. NO X */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
           <div className="flex items-center gap-3">
             <span
@@ -215,19 +225,13 @@ export default function Chatbot() {
                 online ? "bg-emerald-400" : "bg-red-400"
               }`}
             />
-            <span className="text-sm opacity-80">
-              {online ? "Online" : "Offline"}
-            </span>
+            <span className="text-sm opacity-80">{online ? "Online" : "Offline"}</span>
           </div>
 
           <div className="text-base font-semibold">Esita</div>
         </div>
 
-        {/* Messages */}
-        <div
-          ref={boxRef}
-          className="h-[calc(86vh-140px)] px-6 py-5 overflow-y-auto"
-        >
+        <div ref={boxRef} className="h-[calc(86vh-140px)] px-6 py-5 overflow-y-auto">
           <div className="space-y-4">
             {messages.map((m, idx) => {
               const isUser = m.role === "user";
@@ -237,12 +241,11 @@ export default function Chatbot() {
                   className={`flex ${isUser ? "justify-end" : "justify-start"}`}
                 >
                   <div
-                    className={`max-w-[78%] rounded-2xl px-4 py-3 leading-relaxed
-                      ${
-                        isUser
-                          ? "bg-white text-slate-950"
-                          : "bg-white/10 border border-white/10"
-                      }`}
+                    className={`max-w-[78%] rounded-2xl px-4 py-3 leading-relaxed ${
+                      isUser
+                        ? "bg-white text-slate-950"
+                        : "bg-white/10 border border-white/10"
+                    }`}
                   >
                     <MarkdownMessage text={m.text} />
                   </div>
@@ -260,7 +263,6 @@ export default function Chatbot() {
           </div>
         </div>
 
-        {/* Input */}
         <div className="px-6 py-4 border-t border-white/10">
           <div className="flex gap-3">
             <textarea
@@ -280,7 +282,6 @@ export default function Chatbot() {
               Send
             </button>
           </div>
-          
         </div>
       </div>
     </div>
