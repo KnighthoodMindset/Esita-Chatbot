@@ -26,17 +26,17 @@ app = FastAPI(title="Esita Backend", version="1.0.0")
 # ----------------------------
 # CORS (IMPORTANT FOR NETLIFY)
 # ----------------------------
-ALLOW_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://esita-chatbot.netlify.app",
-    "https://697c004cf8eb34059ed1e5b7--esita-chatbot.netlify.app",
-]
-
+# ✅ Production URL fixed
+# ✅ All Netlify preview URLs allowed via regex
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOW_ORIGINS,
-    allow_credentials=True,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "https://esita-chatbot.netlify.app",
+    ],
+    allow_origin_regex=r"^https://.*\.netlify\.app$",
+    allow_credentials=False,  # ✅ keep False (no cookies)
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -48,23 +48,31 @@ class HistoryItem(BaseModel):
     role: str  # "user" or "assistant"
     text: str
 
+
 class ChatRequest(BaseModel):
     message: str
     history: Optional[List[HistoryItem]] = []
 
+
 class ChatResponse(BaseModel):
     reply: str
+
 
 # ----------------------------
 # ROUTES
 # ----------------------------
 @app.get("/")
 def root():
-    return {"message": "Esita backend is running ✅", "try": ["/health", "/docs", "/api/chat (POST)"]}
+    return {
+        "message": "Esita backend is running ✅",
+        "try": ["/health", "/docs", "/api/chat (POST)"],
+    }
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
@@ -80,9 +88,9 @@ def chat(req: ChatRequest):
     # Speed: keep smaller history
     history = req.history[-6:] if req.history else []
 
-    # Clean prompt
+    # System prompt (short for speed)
     lines = [
-        "SYSTEM: You are Esita, a helpful assistant. Reply clearly and briefly unless user asks for long explanation.",
+        "SYSTEM: You are Esita, a helpful assistant. Reply clearly and briefly unless the user asks for a long explanation.",
     ]
 
     for h in history:
@@ -100,7 +108,7 @@ def chat(req: ChatRequest):
     prompt = "\n".join(lines)
 
     try:
-        # ✅ Correct model name (NO "models/")
+        # ✅ Model name correct
         res = client.models.generate_content(
             model="gemini-1.5-flash",
             contents=prompt,
@@ -113,4 +121,5 @@ def chat(req: ChatRequest):
         return ChatResponse(reply=text)
 
     except Exception as e:
+        # show real error
         return ChatResponse(reply=f"❌ Server error: {str(e)}")
