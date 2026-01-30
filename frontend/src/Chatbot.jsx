@@ -2,11 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-// ✅ Use deployed backend via Vite env, fallback to local for dev
-const API_BASE = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").replace(
-  /\/+$/,
-  ""
-);
+const API_BASE = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
 
 function normalize(s = "") {
   return s.toLowerCase().trim();
@@ -130,7 +126,6 @@ export default function Chatbot() {
   }, [messages, sending]);
 
   const historyForServer = useMemo(() => {
-    // Send last few messages only
     const trimmed = messages.slice(-10).map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
       text: m.text,
@@ -142,11 +137,9 @@ export default function Chatbot() {
     const text = input.trim();
     if (!text || sending) return;
 
-    // user message
     setMessages((prev) => [...prev, { role: "user", text }]);
     setInput("");
 
-    // local fixed replies
     if (isCreatorQuestion(text)) {
       setMessages((prev) => [
         ...prev,
@@ -171,24 +164,10 @@ export default function Chatbot() {
         }),
       });
 
-      // ✅ handle non-200 errors gracefully
-      if (!r.ok) {
-        const errText = await r.text();
-        setOnline(false);
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", text: `❌ Server error: ${r.status}\n${errText}` },
-        ]);
-        return;
-      }
-
       const data = await r.json();
 
       if (data?.error) {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", text: `❌ ${data.error}` },
-        ]);
+        setMessages((prev) => [...prev, { role: "assistant", text: `❌ ${data.error}` }]);
       } else {
         setMessages((prev) => [
           ...prev,
@@ -225,7 +204,9 @@ export default function Chatbot() {
                 online ? "bg-emerald-400" : "bg-red-400"
               }`}
             />
-            <span className="text-sm opacity-80">{online ? "Online" : "Offline"}</span>
+            <span className="text-sm opacity-80">
+              {online ? "Online" : "Offline"}
+            </span>
           </div>
 
           <div className="text-base font-semibold">Esita</div>
@@ -236,10 +217,7 @@ export default function Chatbot() {
             {messages.map((m, idx) => {
               const isUser = m.role === "user";
               return (
-                <div
-                  key={idx}
-                  className={`flex ${isUser ? "justify-end" : "justify-start"}`}
-                >
+                <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
                   <div
                     className={`max-w-[78%] rounded-2xl px-4 py-3 leading-relaxed ${
                       isUser
@@ -281,6 +259,9 @@ export default function Chatbot() {
             >
               Send
             </button>
+          </div>
+          <div className="mt-2 text-xs opacity-60">
+            API: {API_BASE}
           </div>
         </div>
       </div>

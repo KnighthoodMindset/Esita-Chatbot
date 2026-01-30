@@ -1,76 +1,120 @@
 import os
-import requests
-from dotenv import load_dotenv
+from typing import List, Optional
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import requests
+from dotenv import load_dotenv
+
+from google import genai
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# ----------------------------
+# CONFIG
+# ----------------------------
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_KEY")
 
-app = FastAPI()
+if not GEMINI_API_KEY:
+    # Don't crash hard; return helpful error in /api/chat
+    pass
 
-# Dev lo allow all. Deploy ayyaka only your frontend domain pettu.
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+app = FastAPI(title="Esita Backend", version="1.0.0")
+
+
+# ----------------------------
+# CORS (IMPORTANT FOR NETLIFY)
+# ----------------------------
+# Add your Netlify production URL + the preview URL that you tested.
+# Update preview URL if it changes.
+ALLOW_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://esita-chatbot.netlify.app",
+    "https://697c004cf8eb34059ed1e5b7--esita-chatbot.netlify.app",  # <-- your preview link
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# ----------------------------
+# MODELS
+# ----------------------------
+class HistoryItem(BaseModel):
+    role: str  # "user" or "assistant"
+    text: str
+
+
 class ChatRequest(BaseModel):
     message: str
-    history: list[dict] = []  # optional: [{"role":"user","text":"..."}, {"role":"assistant","text":"..."}]
+    history: Optional[List[HistoryItem]] = []
 
-# ✅ ADD THIS ROOT ROUTE (so / won't be 404)
+
+class ChatResponse(BaseModel):
+    reply: str
+
+
+# ----------------------------
+# ROUTES
+# ----------------------------
 @app.get("/")
 def root():
-    return {
-        "message": "Esita backend is running ✅",
-        "try": ["/health", "/docs", "/api/chat (POST)"]
-    }
+    return {"message": "Esita backend is running ✅", "try": ["/health", "/docs", "/api/chat (POST)"]}
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-@app.post("/api/chat")
+
+@app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    if not GEMINI_API_KEY:
-        return {"error": "Server error: GEMINI_API_KEY not set in .env"}
+    if not GEMINI_API_KEY or not client:
+        return ChatResponse(
+            reply="❌ Gemini API key not found. Add GEMINI_API_KEY in Render Environment Variables."
+        )
 
-    user_text = (req.message or "").strip()
-    if not user_text:
-        return {"error": "Message is empty."}
+    user_msg = (req.message or "").strip()
+    if not user_msg:
+        return ChatResponse(reply="Please type something 🙂")
 
-    # Convert history to Gemini format (keep last few messages)
-    parts = []
-    trimmed = req.history[-8:] if req.history else []
-    for m in trimmed:
-        role = m.get("role")
-        text = (m.get("text") or "").strip()
-        if not text:
-            continue
-        parts.append({"text": f"{role}: {text}"})
+    # Build prompt with small history
+    lines = []
+    if req.history:
+        for h in req.history[-10:]:
+            r = (h.role or "").lower().strip()
+            t = (h.text or "").strip()
+            if not t:
+                continue
+            if r not in ["user", "assistant"]:
+                r = "user"
+            lines.append(f"{r.upper()}: {t}")
 
-    parts.append({"text": f"user: {user_text}"})
+    lines.append(f"USER: {user_msg}")
+    lines.append("ASSISTANT:")
 
-    url = f"https://generativelanguage.googleapis.com/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    payload = {"contents": [{"parts": parts}]}
+    prompt = "\n".join(lines)
 
     try:
-        r = requests.post(url, json=payload, timeout=20)
-        data = r.json()
+        # Fast + simple Gemini call
+        res = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt,
+        )
 
-        if "error" in data:
-            return {"error": data["error"].get("message", "Gemini API error")}
+        text = (res.text or "").strip()
+        if not text:
+            text = "I couldn't generate a reply. Please try again."
 
-        reply = data["candidates"][0]["content"]["parts"][0]["text"]
-        return {"reply": reply}
+        return ChatResponse(reply=text)
 
     except Exception as e:
-        return {"error": f"Server request failed: {e}"}
+        return ChatResponse(reply=f"❌ Server error: {str(e)}")
