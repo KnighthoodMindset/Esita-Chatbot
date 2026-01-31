@@ -6,20 +6,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from google import genai
+from groq import Groq
 
 load_dotenv()
 
 # ----------------------------
-# CONFIG
+# CONFIG (GROQ)
 # ----------------------------
-GEMINI_API_KEY = (
-    os.getenv("GEMINI_API_KEY")
-    or os.getenv("GOOGLE_API_KEY")
-    or os.getenv("GEMINI_KEY")
-)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
 
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 app = FastAPI(title="Esita Backend", version="1.0.0")
 
@@ -63,16 +60,21 @@ class ChatResponse(BaseModel):
 # ----------------------------
 @app.get("/")
 def root():
-    return {"message": "Esita backend is running ✅", "try": ["/health", "/docs", "/api/chat (POST)"]}
+    return {
+        "message": "Esita backend is running ✅",
+        "try": ["/health", "/docs", "/api/chat (POST)"],
+        "provider": "groq",
+        "model": GROQ_MODEL,
+    }
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "provider": "groq", "model": GROQ_MODEL}
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
-    if not GEMINI_API_KEY or not client:
-        return ChatResponse(reply="❌ Gemini API key not found. Add GEMINI_API_KEY in Render Environment Variables.")
+    if not GROQ_API_KEY or not client:
+        return ChatResponse(reply="❌ GROQ API key not found. Add GROQ_API_KEY in Render Environment Variables.")
 
     user_msg = (req.message or "").strip()
     if not user_msg:
@@ -81,8 +83,12 @@ def chat(req: ChatRequest):
     # Keep small history (speed)
     history = req.history[-6:] if req.history else []
 
-    prompt_lines = [
-        "SYSTEM: You are Esita, a helpful assistant. Reply clearly and briefly unless user asks for long explanation."
+    # Convert your HistoryItem format -> Groq chat messages
+    messages = [
+        {
+            "role": "system",
+            "content": "You are Esita, a helpful assistant. Reply clearly and briefly unless user asks for long explanation.",
+        }
     ]
 
     for h in history:
@@ -92,24 +98,22 @@ def chat(req: ChatRequest):
             continue
         if r not in ["user", "assistant"]:
             r = "user"
-        prompt_lines.append(f"{r.upper()}: {t}")
+        messages.append({"role": r, "content": t})
 
-    prompt_lines.append(f"USER: {user_msg}")
-    prompt_lines.append("ASSISTANT:")
-
-    prompt = "\n".join(prompt_lines)
+    messages.append({"role": "user", "content": user_msg})
 
     try:
-        # ✅ Use a currently supported model id (instead of gemini-1.5-flash)
-        res = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
+        resp = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=512,
         )
 
-        text = (getattr(res, "text", "") or "").strip()
+        text = (resp.choices[0].message.content or "").strip() if resp.choices else ""
         if not text:
             text = "I couldn't generate a reply. Please try again."
         return ChatResponse(reply=text)
 
     except Exception as e:
-        return ChatResponse(reply=f"❌ Server error: {str(e)}")
+        return ChatResponse(reply=f"❌ Server error: {type(e).__name__}: {str(e)}")
